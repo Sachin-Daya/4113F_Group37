@@ -1,6 +1,7 @@
 //This is the code that will be used when deploying the system
 #include <Arduino.h>
 #include <HX711.h>
+#include "driver/timer.h"
 
 // HX711 circuit wiring
 const int LOADCELL_DOUT_PIN_A = 13;
@@ -21,64 +22,78 @@ const int CAL_FACTOR_B = -105.496;
 const int CAL_FACTOR_C = -147.5453;
 const int CAL_FACTOR_D = -83.841;
 
+//Global Variables
 HX711 scaleA;
 HX711 scaleB;
 HX711 scaleC;
 HX711 scaleD;
 
-void setup() {
+hw_timer_t *tim00 = NULL;
 
-  //code runs once
-  Serial.begin(57600); //set baud rate of serial monitor to 57 600
-  //Initialise all load cells
-  scaleA.begin(LOADCELL_DOUT_PIN_A, LOADCELL_SCK_PIN_A);
-  scaleB.begin(LOADCELL_DOUT_PIN_B, LOADCELL_SCK_PIN_B);
-  scaleC.begin(LOADCELL_DOUT_PIN_C, LOADCELL_SCK_PIN_C);
-  scaleD.begin(LOADCELL_DOUT_PIN_D, LOADCELL_SCK_PIN_D);
+void IRAM_ATTR timerInterruptHandler(){
+  //This code handles the timer interrupt to occasionally measure the scale before anything is weighed
+  scaleTare();
+}//timerInterrupt
 
-  if(scaleA.is_ready() && scaleB.is_ready() && scaleC.is_ready() && scaleD.is_ready()){
-  //Set the scale factors for each load cell
-    scaleA.set_scale(CAL_FACTOR_A);   
-    scaleB.set_scale(CAL_FACTOR_B);
-    scaleC.set_scale(CAL_FACTOR_C); 
-    scaleD.set_scale(CAL_FACTOR_D);
-
-    //Tare Callibration
-    Serial.println("TARE...");
-    scaleA.tare();
-    scaleB.tare();
-    scaleC.tare();
-    scaleD.tare();
-    Serial.println("PLACE ITEM ON SCALE NOW");
-    delay(5000);
-}//if
-
-}//setup()
-
-void loop() {
-  int RFID_flag = 0;
-
-  // put your main code here, to run repeatedly:
-if(RFID_flag == 1){
-  Serial.println("RFID DETECTED - BEGINNING SCALE READING");
-
-  if (scaleA.is_ready() && scaleB.is_ready() && scaleC.is_ready() && scaleD.is_ready()) {
-    Serial.println("READING...");
+void readScale(){
     long readingA = scaleA.get_units(20);
     long readingB = scaleB.get_units(20);
     long readingC = scaleC.get_units(20);
     long readingD = scaleD.get_units(20);
 
-    Serial.println("RESULTS...");
     long avgWeight = (readingA+readingB+readingC+readingD)/4;
-    Serial.println(readingA);
-    Serial.println(readingB);
-    Serial.println(readingC);
-    Serial.println(readingD);
-    Serial.println("AVERAGE WEIGHT:");
-    Serial.print(avgWeight);
-    Serial.println("_____________________________________________________________");
-    
+}//readScale
+
+void initScale(){
+  //Initialise all load cells
+  scaleA.begin(LOADCELL_DOUT_PIN_A, LOADCELL_SCK_PIN_A);
+  scaleB.begin(LOADCELL_DOUT_PIN_B, LOADCELL_SCK_PIN_B);
+  scaleC.begin(LOADCELL_DOUT_PIN_C, LOADCELL_SCK_PIN_C);
+  scaleD.begin(LOADCELL_DOUT_PIN_D, LOADCELL_SCK_PIN_D);
+}//initScale
+
+void setScaleFactors(){
+    //Set the scale factors for each load cell
+    scaleA.set_scale(CAL_FACTOR_A);   
+    scaleB.set_scale(CAL_FACTOR_B);
+    scaleC.set_scale(CAL_FACTOR_C); 
+    scaleD.set_scale(CAL_FACTOR_D);
+}//setScaleFactors
+
+void scaleTare(){
+  //Tare Callibration
+    scaleA.tare();
+    scaleB.tare();
+    scaleC.tare();
+    scaleD.tare();
+}//scaleTare
+
+void setup() {
+  //This section initialises the timer interrupt
+    tim00 = timerBegin(1);  // Use 1 Hz timer
+
+    timerAttachInterrupt(tim00, &timerInterruptHandler);
+
+    timerWrite(tim00, 300);  //call every 300 seconds
+    //code runs once
+    Serial.begin(57600); //set baud rate of serial monitor to 57 600
+  
+    initScale();
+
+    if(scaleA.is_ready() && scaleB.is_ready() && scaleC.is_ready() && scaleD.is_ready()){
+    setScaleFactors();
+    scaleTare(); 
+  }//if
+}//setup()
+
+void loop(){
+  int RFID_flag = 0;
+
+  if(RFID_flag == 1){//If the RFID is detected, begin measuring
+  Serial.println("RFID DETECTED - BEGINNING SCALE READING");
+
+  if (scaleA.is_ready() && scaleB.is_ready() && scaleC.is_ready() && scaleD.is_ready()) {
+    readScale();
   }else{
     Serial.println("ERROR: HX711 NOT FOUND");
   }//if
