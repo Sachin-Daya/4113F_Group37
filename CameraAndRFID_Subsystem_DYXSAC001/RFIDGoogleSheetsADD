@@ -1,0 +1,54 @@
+function doGet(e) { 
+  Logger.log(JSON.stringify(e));
+  var result = 'OK';
+  if (!e.parameter || typeof e.parameter.uid === 'undefined') {
+    result = 'No_Parameters';
+    return ContentService.createTextOutput(result);
+  }
+
+  var sheet_id = '1UA8xxDRXM9T1O3rmNAXEMrRvyqDVa33kuTi0PPssxV0'; 	// Spreadsheet ID.
+  var sheet_UD = 'User_Data';    // Sheet name for user data (manual PenguinName + UID).
+  var sheet_AT = 'PenguinDataFinal';  // Sheet name for attendance log.
+
+  var sheet_open = SpreadsheetApp.openById(sheet_id);
+  var sheet_user_data = sheet_open.getSheetByName(sheet_UD);
+  var sheet_attendence = sheet_open.getSheetByName(sheet_AT);
+
+  var uid_val = e.parameter.uid.trim();
+  var weight_val = (typeof e.parameter.weight !== 'undefined') ? e.parameter.weight.trim() : "";
+
+  // Look up Penguin Name from User_Data sheet, where UID matches (assume UID is column B, PenguinName is column A)
+  var penguinName = "Unknown";
+  var totalRows = sheet_user_data.getLastRow();
+  if (totalRows > 1) {
+    var userData = sheet_user_data.getRange(2, 1, totalRows - 1, 2).getValues();
+    for (var i = 0; i < userData.length; i++) {
+      if (String(userData[i][1]).trim().toUpperCase() == uid_val.toUpperCase()) {
+        penguinName = userData[i][0];
+        break;
+      }
+    }
+  }
+
+  // Date and Time in South African timezone
+  var dateObj = new Date();
+  var tz = "Africa/Johannesburg";
+  var currDate = Utilities.formatDate(dateObj, tz, 'yyyy/MM/dd');
+  var currTime = Utilities.formatDate(dateObj, tz, 'HH:mm:ss');
+  var dateTimeForName = Utilities.formatDate(dateObj, tz, 'yyyyMMdd-HHmmss');
+  var imageFileName = dateTimeForName + ".jpg";
+
+  // Append row to Attendance/Log sheet: |Date|Time|PenguinName|ID|ImageFileName|Weight|
+  sheet_attendence.appendRow([currDate, currTime, penguinName, uid_val, imageFileName, weight_val]);
+  SpreadsheetApp.flush();
+
+  // Save variables for the rename job
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('imageFileName', imageFileName);
+  props.setProperty('folderName', 'Group37Design'); // Update to match your actual main folder if needed
+  props.setProperty('subFolderName', Utilities.formatDate(dateObj, tz, 'yyyyMMdd'));
+
+
+  result += ",Logged," + currDate + "," + currTime + "," + penguinName + "," + uid_val + "," + imageFileName + "," + weight_val;
+  return ContentService.createTextOutput(result);
+}
