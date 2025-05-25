@@ -1,4 +1,4 @@
-//======================================== Including the libraries.
+////////CAMERA CODE BEST VERSION 1
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include "esp_wpa2.h" // WPA2 Enterprise library
@@ -6,15 +6,13 @@
 #include "soc/rtc_cntl_reg.h"
 #include "Base64.h"
 #include "esp_camera.h"
-//========================================
 
-//======================================== CAMERA_MODEL_AI_THINKER GPIO.
+// CAMERA_MODEL_AI_THINKER GPIO.
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM      0
 #define SIOD_GPIO_NUM     26
 #define SIOC_GPIO_NUM     27
-
 #define Y9_GPIO_NUM       35
 #define Y8_GPIO_NUM       34
 #define Y7_GPIO_NUM       39
@@ -26,126 +24,116 @@
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
-//========================================
 
-// LED Flash PIN (GPIO 4)
-#define FLASH_LED_PIN 4
+#define FLASH_LED_PIN 4       // Camera Flash LED (active HIGH)
+#define STATUS_LED_PIN 33     // Onboard LED (active LOW, inverted logic)
+#define TRIGGER_PIN 2         // Use GPIO 2 as trigger input
 
-// RFID trigger input
-#define TRIGGER_PIN 2
-
-//======================================== eduroam WiFi credentials (UCT)
 #define EAP_ANONYMOUS_IDENTITY "anonymous@uct.ac.za"
-#define EAP_IDENTITY           "dyxsac001@wf.uct.ac.za"    // Your UCT username@wf.uct.ac.za
-#define EAP_PASSWORD           "SachinDevil13@"            // Your UCT password
-#define EAP_USERNAME           "dyxsac001@wf.uct.ac.za"    // Typically same as IDENTITY
+#define EAP_IDENTITY           "dyxsac001@wf.uct.ac.za"
+#define EAP_PASSWORD           "SachinDevil13@"
+#define EAP_USERNAME           "dyxsac001@wf.uct.ac.za"
 
 const char* ssid = "eduroam";
-//========================================
 
-//======================================== Replace with your "Deployment ID" and Folder Name.
-String myDeploymentID = "AKfycbwixYe0XK8_YDnp6hvyKXSGKNBSTe33hIV0CU_euuVVej1xAez2j8Dqa8_luTl7E2QM";
+// Replace with your "Deployment ID" and Folder Name.
+String myDeploymentID = "AKfycbyTZK96t5At-4vIIQr7UXgKaINBHN8_A1dwlIKBpbf3yw_0ThxuD8h9l_9kOE1EFtfV";
 String myMainFolderName = "Group37Design";
-//========================================
 
-//======================================== Variables for Timer/Millis.
-// (Removed timer logic. Trigger-based now.)
-//========================================
+bool LED_Flash_ON = false; // No flash on normal photos, only for success indication
 
-// Variable to set capture photo with LED Flash.
-// Set to "false" so the Flash LED will not light up when capturing a photo.
-bool LED_Flash_ON = false;
-
-// Initialize WiFiClientSecure.
 WiFiClientSecure client;
 
-//________________________________________________________________________________ Test_Con()
-// This subroutine is to test the connection to "script.google.com".
+// Indicate error or status using onboard LED (inverted logic: LOW=ON, HIGH=OFF)
+void setStatusLED(bool on) {
+  digitalWrite(STATUS_LED_PIN, on ? LOW : HIGH); // LOW = ON
+}
+
+// --- Flash blink function for indicator ---
+void blinkFlash(int times = 2, int duration = 200) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(FLASH_LED_PIN, HIGH);
+    delay(duration);
+    digitalWrite(FLASH_LED_PIN, LOW);
+    delay(duration);
+  }
+}
+
+//--- Connection test with error/status indication ---
 void Test_Con() {
   const char* host = "script.google.com";
   while(1) {
     Serial.println("-----------");
     Serial.println("Connection Test...");
     Serial.println("Connect to " + String(host));
-  
+
     client.setInsecure();
-  
+    setStatusLED(true); // ON: indicate trying to connect
+
     if (client.connect(host, 443)) {
       Serial.println("Connection successful.");
+      setStatusLED(false); // OFF: success
       Serial.println("-----------");
       client.stop();
       break;
     } else {
       Serial.println("Connected to " + String(host) + " failed.");
       Serial.println("Wait a moment for reconnecting.");
+      setStatusLED(true); // ON: error
       Serial.println("-----------");
       client.stop();
     }
-  
     delay(1000);
   }
 }
-//________________________________________________________________________________ 
 
-//________________________________________________________________________________ SendCapturedPhotos()
-// Subroutine for capturing and sending photos to Google Drive.
+//--- Capture and upload photo with flash indication only ---
 void SendCapturedPhotos() {
+  // --- Blink flash LED to indicate tag detected ---
+  blinkFlash(2, 200);  // Blink twice, 200ms each
+
   const char* host = "script.google.com";
   Serial.println();
   Serial.println("-----------");
   Serial.println("Connect to " + String(host));
-  
   client.setInsecure();
-
-  // OPTIONAL: Flash LED blinks once to indicate connection start (for feedback, not for photo)
-  digitalWrite(FLASH_LED_PIN, HIGH);
-  delay(100);
-  digitalWrite(FLASH_LED_PIN, LOW);
-  delay(100);
 
   if (client.connect(host, 443)) {
     Serial.println("Connection successful.");
 
-    // NO flash when taking photo (LED_Flash_ON is false)
-    //.............................. Taking a photo.
     Serial.println();
     Serial.println("Taking a photo...");
-
-    // Camera warm-up (recommended for ESP32-CAM)
+    // Camera warm-up
     for (int i = 0; i <= 3; i++) {
       camera_fb_t * fb = NULL;
       fb = esp_camera_fb_get();
       if(!fb) {
         Serial.println("Camera capture failed");
-        Serial.println("Restarting the ESP32 CAM.");
+        setStatusLED(true); // ON: error
         delay(1000);
         ESP.restart();
         return;
-      } 
+      }
       esp_camera_fb_return(fb);
       delay(200);
     }
-  
     camera_fb_t * fb = NULL;
     fb = esp_camera_fb_get();
     if(!fb) {
       Serial.println("Camera capture failed");
-      Serial.println("Restarting the ESP32 CAM.");
+      setStatusLED(true); // ON: error
       delay(1000);
       ESP.restart();
       return;
-    } 
-  
-    Serial.println("Taking a photo was successful.");
-    //.............................. 
+    }
 
-    //.............................. Sending image to Google Drive.
+    Serial.println("Taking a photo was successful.");
+
+    // Sending image to Google Drive.
     Serial.println();
     Serial.println("Sending image to Google Drive.");
     Serial.println("Size: " + String(fb->len) + "byte");
-    
     String url = "/macros/s/" + myDeploymentID + "/exec?folder=" + myMainFolderName;
-
     client.println("POST " + url + " HTTP/1.1");
     client.println("Host: " + String(host));
     client.println("Transfer-Encoding: chunked");
@@ -153,7 +141,7 @@ void SendCapturedPhotos() {
 
     int fbLen = fb->len;
     char *input = (char *)fb->buf;
-    int chunkSize = 3 * 1000; //--> must be multiple of 3.
+    int chunkSize = 3 * 1000;
     int chunkBase64Size = base64_enc_len(chunkSize);
     char output[chunkBase64Size + 1];
 
@@ -175,11 +163,9 @@ void SendCapturedPhotos() {
     }
     client.print("0\r\n");
     client.print("\r\n");
-
     esp_camera_fb_return(fb);
-    //.............................. 
 
-    //.............................. Waiting for response.
+    // Wait for response.
     Serial.println("Waiting for response.");
     long int StartTime = millis();
     while (!client.available()) {
@@ -195,50 +181,37 @@ void SendCapturedPhotos() {
     while (client.available()) {
       Serial.print(char(client.read()));
     }
-    //.............................. 
+    // Flash the flash LED after a successful upload as feedback (only here!)
+    digitalWrite(FLASH_LED_PIN, HIGH);
+    delay(500);
+    digitalWrite(FLASH_LED_PIN, LOW);
+    // Status LED remains OFF (no error)
+    setStatusLED(false);
 
-    // Flash LED blinks once as an indicator of successful upload (optional feedback)
-  //digitalWrite(FLASH_LED_PIN, HIGH);
-  // delay(500);
-  //digitalWrite(FLASH_LED_PIN, LOW);
-  //delay(500);
-  }
-  else {
+  } else {
     Serial.println("Connected to " + String(host) + " failed.");
-    
-    // Flash LED blinks twice as a failed connection indicator (optional feedback)
-    digitalWrite(FLASH_LED_PIN, HIGH);
-    delay(500);
-    digitalWrite(FLASH_LED_PIN, LOW);
-    delay(500);
-    digitalWrite(FLASH_LED_PIN, HIGH);
-    delay(500);
-    digitalWrite(FLASH_LED_PIN, LOW);
+    setStatusLED(true); // ON: error
     delay(500);
   }
-  //---------------------------------------- 
-
   Serial.println("-----------");
-
   client.stop();
 }
-//________________________________________________________________________________ 
 
-//________________________________________________________________________________ VOID SETUP()
+//--- SETUP ---
 void setup() {
-  // put your setup code here, to run once:
-  
-  // Disable brownout detector.
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
-  
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Disable brownout detector
+
   Serial.begin(115200);
   Serial.println();
   delay(1000);
 
   pinMode(FLASH_LED_PIN, OUTPUT);
-  pinMode(TRIGGER_PIN, INPUT);
+  digitalWrite(FLASH_LED_PIN, LOW);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  setStatusLED(true); // ON at startup (until WiFi/connection OK)
+  pinMode(TRIGGER_PIN, INPUT_PULLDOWN);
 
-  // Setting the ESP32 WiFi to station mode.
+  // WiFi setup
   Serial.println();
   Serial.println("Setting the ESP32 WiFi to station mode.");
   WiFi.mode(WIFI_STA);
@@ -246,40 +219,35 @@ void setup() {
   Serial.println();
   Serial.print("Connecting to network: ");
   Serial.println(ssid);
-  WiFi.disconnect(true);  // disconnect from any previous WiFi
+  WiFi.disconnect(true);
 
-  // WPA2 Enterprise connection (NO CERTIFICATE)
   WiFi.begin(ssid, WPA2_AUTH_PEAP, EAP_IDENTITY, EAP_USERNAME, EAP_PASSWORD);
 
   int connecting_process_timed_out = 20 * 2; // 20 seconds
-
   while (WiFi.status() != WL_CONNECTED) {
-      Serial.print(".");
-      digitalWrite(FLASH_LED_PIN, HIGH);
-      delay(250);
-      digitalWrite(FLASH_LED_PIN, LOW);
-      delay(250);
-      connecting_process_timed_out--;
-      if (connecting_process_timed_out == 0) {
-          Serial.println();
-          Serial.print("Failed to connect to ");
-          Serial.println(ssid);
-          Serial.println("Restarting the ESP32 CAM.");
-          delay(1000);
-          ESP.restart();
-      }
+    Serial.print(".");
+    setStatusLED(true); // ON: connecting/error
+    delay(250);
+    connecting_process_timed_out--;
+    if (connecting_process_timed_out == 0) {
+      Serial.println();
+      Serial.print("Failed to connect to ");
+      Serial.println(ssid);
+      setStatusLED(true); // ON: error
+      delay(1000);
+      ESP.restart();
+    }
   }
 
-  digitalWrite(FLASH_LED_PIN, LOW);
+  setStatusLED(false); // OFF: connected
   Serial.println();
   Serial.println("Successfully connected to eduroam!");
   Serial.print("ESP32-CAM IP Address: ");
   Serial.println(WiFi.localIP());
 
-  //======================================== Set the camera ESP32 CAM.
+  // Camera setup
   Serial.println();
   Serial.println("Set the camera ESP32 CAM...");
-  
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -301,30 +269,24 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  
-  // init with high specs to pre-allocate larger buffers
   if(psramFound()){
     config.frame_size = FRAMESIZE_UXGA;
-    config.jpeg_quality = 10;  //0-63 lower number means higher quality
+    config.jpeg_quality = 10;
     config.fb_count = 2;
   } else {
     config.frame_size = FRAMESIZE_SVGA;
-    config.jpeg_quality = 8;  //0-63 lower number means higher quality
+    config.jpeg_quality = 8;
     config.fb_count = 1;
   }
-  
-  // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x", err);
-    Serial.println();
-    Serial.println("Restarting the ESP32 CAM.");
+    setStatusLED(true); // ON: error
     delay(1000);
     ESP.restart();
   }
-
   sensor_t * s = esp_camera_sensor_get();
-  s->set_framesize(s, FRAMESIZE_SXGA);  //--> UXGA|SXGA|XGA|SVGA|VGA|CIF|QVGA|HQVGA|QQVGA
+  s->set_framesize(s, FRAMESIZE_SXGA);
 
   Serial.println("Setting the camera successfully.");
   Serial.println();
@@ -334,26 +296,22 @@ void setup() {
   Test_Con();
 
   Serial.println();
-  Serial.println("ESP32-CAM will capture and send a photo only when TRIGGER_PIN (GPIO 15) goes HIGH.");
+  Serial.println("ESP32-CAM will capture and send a photo only when TRIGGER_PIN (GPIO 2) goes HIGH.");
+  setStatusLED(false); // OFF: ready/idle
   Serial.println();
   delay(2000);
 }
-//________________________________________________________________________________ 
 
-//________________________________________________________________________________ VOID LOOP()
+//--- MAIN LOOP ---
 void loop() {
-  // Take photo and upload ONLY when RFID (GPIO 15) goes HIGH
   if (digitalRead(TRIGGER_PIN) == HIGH) {
     delay(50); // debounce
     if (digitalRead(TRIGGER_PIN) == HIGH) {
       SendCapturedPhotos();
-      // Wait for pin to go LOW before allowing another capture
       while (digitalRead(TRIGGER_PIN) == HIGH) {
         delay(10);
       }
-      delay(200); // further debounce
+      delay(200);
     }
   }
 }
-//________________________________________________________________________________ 
-

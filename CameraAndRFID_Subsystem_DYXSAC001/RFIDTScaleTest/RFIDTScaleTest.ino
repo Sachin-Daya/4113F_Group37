@@ -1,9 +1,10 @@
 #include <SPI.h>
 #include <MFRC522.h>
 #include <WiFi.h>
-#include "esp_wpa2.h"
+#include "esp_wpa2.h" // You may see a deprecation warning; it still works for Eduroam.
 #include <HTTPClient.h>
 #include <HX711.h>
+#include <Ticker.h>
 
 // ----- Eduroam credentials -----
 #define EAP_ANONYMOUS_IDENTITY "anonymous@uct.ac.za"
@@ -13,7 +14,7 @@
 const char* ssid = "eduroam";
 
 // ----- Google Apps Script URL -----
-String Web_App_URL = "https://script.google.com/macros/s/AKfycbzmTck2CD9jZx_da39DUtA-0vWwDUEC9DUAfPukkBu7MWC-8W2BTwncaRTKGSAqD23zaQ/exec";
+String Web_App_URL = "https://script.google.com/macros/s/AKfycbx2clKv38RccLRd5iIBZ6n5Bc5jUcPmMPjt1nvsWuO-rnXnqIJsfJBjQefToC5OyrH5Gw/exec";
 
 // ----- RFID -----
 #define SS_PIN      5
@@ -31,16 +32,91 @@ const int LOADCELL_DOUT_PIN_C = 26;
 const int LOADCELL_SCK_PIN_C  = 25;
 const int LOADCELL_DOUT_PIN_D = 33;
 const int LOADCELL_SCK_PIN_D  = 32;
-const float CAL_FACTOR_A = -32.177;
-const float CAL_FACTOR_B = -105.496;
-const float CAL_FACTOR_C = -147.5453;
-const float CAL_FACTOR_D = -83.841;
+const float CAL_FACTOR_A = -105.90667;
+const float CAL_FACTOR_B = -103.3313;
+const float CAL_FACTOR_C = -102.60667;
+const float CAL_FACTOR_D = -110.95647;
 
 HX711 scaleA, scaleB, scaleC, scaleD;
+
+// ----- Ticker for periodic tare -----
+Ticker tareTicker;
 
 // ----- Globals -----
 String UID_Result = "";
 
+// ----- Function to tare all scales -----
+void scaleTare() {
+  scaleA.tare();
+  scaleB.tare();
+  scaleC.tare();
+  scaleD.tare();
+  Serial.println("Scales tared!");
+}
+
+// ----- Setup scales -----
+void initScale() {
+  scaleA.begin(LOADCELL_DOUT_PIN_A, LOADCELL_SCK_PIN_A);
+  scaleB.begin(LOADCELL_DOUT_PIN_B, LOADCELL_SCK_PIN_B);
+  scaleC.begin(LOADCELL_DOUT_PIN_C, LOADCELL_SCK_PIN_C);
+  scaleD.begin(LOADCELL_DOUT_PIN_D, LOADCELL_SCK_PIN_D);
+}
+
+void setScaleFactors() {
+  scaleA.set_scale(CAL_FACTOR_A);   
+  scaleB.set_scale(CAL_FACTOR_B);
+  scaleC.set_scale(CAL_FACTOR_C); 
+  scaleD.set_scale(CAL_FACTOR_D);
+}
+
+// ----- Get UID from tag -----
+bool getUID() {  
+  if (!mfrc522.PICC_IsNewCardPresent()) return false;
+  if (!mfrc522.PICC_ReadCardSerial()) return false;
+
+  byteArray_to_string(mfrc522.uid.uidByte, mfrc522.uid.size, UID_Result);
+
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
+  return true;
+}
+
+void byteArray_to_string(byte *array, unsigned int len, String &out) {
+  char buffer[32];
+  for (unsigned int i = 0; i < len; i++) {
+    byte nib1 = (array[i] >> 4) & 0x0F;
+    byte nib2 = (array[i] >> 0) & 0x0F;
+    buffer[i * 2 + 0] = nib1 < 0xA ? '0' + nib1 : 'A' + nib1 - 0xA;
+    buffer[i * 2 + 1] = nib2 < 0xA ? '0' + nib2 : 'A' + nib2 - 0xA;
+  }
+  buffer[len * 2] = '\0';
+  out = String(buffer);
+}
+
+// ----- Read average weight -----
+long readAverageWeight() {
+  if (scaleA.is_ready() && scaleB.is_ready() && scaleC.is_ready() && scaleD.is_ready()) {
+    long readingA = scaleA.get_units(20);
+    long readingB = scaleB.get_units(20);
+    long readingC = scaleC.get_units(20);
+    long readingD = scaleD.get_units(20);
+        Serial.println(readingA);
+
+    Serial.println(readingB);
+
+    Serial.println(readingC);
+
+    Serial.println(readingD);
+
+    long avgWeight = (readingA + readingB + readingC + readingD) / 4;
+    return avgWeight;
+  } else {
+    Serial.println("ERROR: HX711 NOT FOUND");
+    return 0;
+  }
+}
+
+// ----- Send HTTP request -----
 void http_Req(String uid, long avgWeight) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Error! WiFi disconnected.");
@@ -68,50 +144,7 @@ void http_Req(String uid, long avgWeight) {
   http.end();
 }
 
-bool getUID() {  
-  if (!mfrc522.PICC_IsNewCardPresent()) return false;
-  if (!mfrc522.PICC_ReadCardSerial()) return false;
-
-  byteArray_to_string(mfrc522.uid.uidByte, mfrc522.uid.size, UID_Result);
-
-  mfrc522.PICC_HaltA();
-  mfrc522.PCD_StopCrypto1();
-  return true;
-}
-
-void byteArray_to_string(byte *array, unsigned int len, String &out) {
-  char buffer[32];
-  for (unsigned int i = 0; i < len; i++) {
-    byte nib1 = (array[i] >> 4) & 0x0F;
-    byte nib2 = (array[i] >> 0) & 0x0F;
-    buffer[i * 2 + 0] = nib1 < 0xA ? '0' + nib1 : 'A' + nib1 - 0xA;
-    buffer[i * 2 + 1] = nib2 < 0xA ? '0' + nib2 : 'A' + nib2 - 0xA;
-  }
-  buffer[len * 2] = '\0';
-  out = String(buffer);
-}
-
-long readAverageWeight() {
-  if (scaleA.is_ready() && scaleB.is_ready() && scaleC.is_ready() && scaleD.is_ready()) {
-    Serial.println("READING...");
-    long readingA = scaleA.get_units(20);
-    long readingB = scaleB.get_units(20);
-    long readingC = scaleC.get_units(20);
-    long readingD = scaleD.get_units(20);
-    Serial.println("RESULTS...");
-    Serial.print("A: "); Serial.println(readingA);
-    Serial.print("B: "); Serial.println(readingB);
-    Serial.print("C: "); Serial.println(readingC);
-    Serial.print("D: "); Serial.println(readingD);
-    long avgWeight = (readingA + readingB + readingC + readingD) / 4;
-    Serial.print("Average Weight: "); Serial.println(avgWeight);
-    return avgWeight;
-  } else {
-    Serial.println("ERROR: HX711 NOT FOUND");
-    return 0;
-  }
-}
-
+// ----- Setup -----
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -147,32 +180,25 @@ void setup() {
     ESP.restart();
   }
   Serial.println("\nWiFi connected");
-  Serial.println("Ready to log attendance and trigger camera.");
+  Serial.println("Ready to log attendance, measure weight, and trigger camera.");
   Serial.println("------------");
 
   // ----- Setup scales -----
-  scaleA.begin(LOADCELL_DOUT_PIN_A, LOADCELL_SCK_PIN_A);
-  scaleB.begin(LOADCELL_DOUT_PIN_B, LOADCELL_SCK_PIN_B);
-  scaleC.begin(LOADCELL_DOUT_PIN_C, LOADCELL_SCK_PIN_C);
-  scaleD.begin(LOADCELL_DOUT_PIN_D, LOADCELL_SCK_PIN_D);
-
+  initScale();
+  delay(1000);
   if (scaleA.is_ready() && scaleB.is_ready() && scaleC.is_ready() && scaleD.is_ready()) {
-    scaleA.set_scale(CAL_FACTOR_A);   
-    scaleB.set_scale(CAL_FACTOR_B);
-    scaleC.set_scale(CAL_FACTOR_C); 
-    scaleD.set_scale(CAL_FACTOR_D);
-
-    //Tare Calibration
-    Serial.println("TARE...");
-    scaleA.tare();
-    scaleB.tare();
-    scaleC.tare();
-    scaleD.tare();
-    Serial.println("PLACE ITEM ON SCALE NOW");
+    setScaleFactors();
+    scaleTare(); 
     delay(5000);
+  } else {
+    Serial.println("ERROR: One or more HX711 NOT FOUND!");
   }
+
+  // ----- Start periodic tare every 20 minutes (1200 sec) -----
+  tareTicker.attach(1200, scaleTare); // every 1200 seconds (20 minutes)
 }
 
+// ----- Main loop -----
 void loop() {
   if (getUID()) {
     Serial.println("Card Detected: " + UID_Result);
